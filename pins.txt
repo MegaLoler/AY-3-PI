@@ -1,0 +1,14 @@
+WiringPi pins configuration:
+============================
+7 = clock out
+8 = data 0
+9 = data 1
+1 = data 2
+0 = data 3
+2 = data 4
+3 = data 5
+4 = data 6
+5 = data 7
+12 = bus control (bc2)
+13 = ay 1 enable (bdir)
+14 = ay 2 enable (bdir)

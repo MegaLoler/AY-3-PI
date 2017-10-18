@@ -43,7 +43,7 @@
 //#define CLK_FREQ 3579545
 
 // sample multiplier (lower is more stable but less than 1 loses sample resolution)
-#define SAMPLE_MULTIPLIER 0.0625
+#define SAMPLE_MULTIPLIER 0.125
 // how much time between samples
 #define SAMPLE_DELAY (1000000 / SAMPLE_MULTIPLIER / 44100)
 

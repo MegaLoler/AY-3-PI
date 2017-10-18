@@ -504,8 +504,8 @@ int main()
 		while(eofPointer - buffer >= BUF_SIZE) eofPointer -= BUF_SIZE;
 	}
 
-	// wait forever ? ?
-	while(1) delay(100);
+	// wait til done playing
+	while(playPointer != eofPointer) delay(100);
 
 	// bye
 	return 0;

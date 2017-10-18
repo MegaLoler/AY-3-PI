@@ -142,6 +142,12 @@ int fileHeader;
 // stores the current offset in file
 int offset;
 
+// stores specified eof offset
+int eof;
+
+// stores specified loop offset
+int loop;
+
 // 32bit buffer
 uint32_t valueBuffer;
 // how many bytes left to add to it
@@ -149,14 +155,20 @@ int valueBufRemaining;
 // how many bytes have been added to it
 int valueBufSize;
 
-// reset the player
+// new song
 // newly expecting header
+void newSong()
+{
+	fileHeader = HEADER_SIZE;
+	offset = 0;
+}
+
+// reset the player
 void resetPlayer()
 {
 	sampleDelta = 0;
-	fileHeader = HEADER_SIZE;
-	offset = 0;
 	eofPointer = playPointer = buffer;
+	newSong();
 }
 
 // reset everything, player and chips
@@ -172,6 +184,13 @@ void collectBytes(uint8_t byte, int bytes)
 	valueBuffer = byte;
 	valueBufSize = 1;
 	valueBufRemaining = bytes - valueBufSize;
+}
+
+// handle a command string
+void handleCommand(int commandString)
+{
+	printf("CMD: 0x%x\n", commandString);
+	sampleDelta++;
 }
 
 // this is the sample timer interrupt handler
@@ -200,18 +219,38 @@ void timerHandler(int sig)
 			fileHeader--;
 
 			// processes header bytes
+			// remainig bytes of file
+			if(offset == 0x04)
+			{
+				collectBytes(byte, 4);
+			}
+			else if(offset == 0x07)
+			{
+				eof = valueBuffer ? (valueBuffer - 0x04) : 0;
+				printf("EOF: 0x%x\n", eof);
+			}
+			// loop offset
+			else if(offset == 0x1C)
+			{
+				collectBytes(byte, 4);
+			}
+			else if(offset == 0x1F)
+			{
+				loop = valueBuffer ? (valueBuffer - 0x1C) : 0;
+				printf("LOOP: 0x%x\n", loop);
+			}
 			// remainig bytes of header
-			if(offset == 0x34)
+			else if(offset == 0x34)
 			{
 				collectBytes(byte, 4);
 			}
 			else if(offset == 0x37)
 			{
 				fileHeader = valueBuffer - valueBufSize;
-				printf("REM: 0x%x\n", valueBuffer);
+				printf("REM: 0x%x\n", fileHeader);
 			}
 			// 32bit value of ay clock value
-			if(offset == 0x74)
+			else if(offset == 0x74)
 			{
 				collectBytes(byte, 4);
 			}
@@ -220,12 +259,46 @@ void timerHandler(int sig)
 				gpioClockSet(PIN_CLK, valueBuffer);
 				printf("CLOCK: 0x%i\n", valueBuffer);
 			}
+
+			// clear the value buffer before reading commands
+			valueBuffer = 0;
 		}
 		else
 		{
-			// processes vgm stream commands
-			printf("CMD: 0x%x\n", byte);
-			exit(0);
+			// processes vgm stream bytes
+			// collect whole command strings
+			printf("bte: 0x%x\n", byte);
+			if(valueBufRemaining == 0)
+			{
+				if(valueBuffer)
+				{
+					handleCommand(valueBuffer);
+					valueBuffer = 0;
+				}
+				else
+				{
+					if((byte & 0xF0) == 0xE0)
+					{
+						collectBytes(byte, 5);
+					}
+					else if((byte & 0xF0) >= 0xC0 && (byte & 0xF0) <= 0xD0)
+					{
+						collectBytes(byte, 4);
+					}
+					else if(((byte & 0xF0) >= 0xA0 && (byte & 0xF0) <= 0xB0) || (byte >= 0x51 && byte <= 0x61))
+					{
+						collectBytes(byte, 3);
+					}
+					else if(byte == 0x4F || byte == 0x50)
+					{
+						collectBytes(byte, 2);
+					}
+					else
+					{
+						handleCommand(byte);
+					}
+				}
+			}
 		}
 
 		// increment the byte offset counter
@@ -290,12 +363,15 @@ int main()
 	eofPointer = buffer;
 
 	// read in data from stdin into the buffer forever
-	uint8_t byte;
-	while((byte = (uint8_t)getchar()) != EOF)
+	int byte;
+	while((byte = getchar()) != -1)
 	{
-		*(eofPointer++) = byte;
+		*(eofPointer++) = (uint8_t)byte;
 		while(eofPointer - buffer >= BUF_SIZE) eofPointer -= BUF_SIZE;
 	}
+
+	// wait forever ? ?
+	while(1) delay(100);
 
 	// bye
 	return 0;

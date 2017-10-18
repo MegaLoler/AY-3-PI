@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <string.h>
+#include <unistd.h>
 #include <signal.h>
 #include <sys/time.h>
 #include <wiringPi.h>
@@ -34,8 +34,10 @@
 #define CLK_FREQ 1789773
 //#define CLK_FREQ 3579545
 
+// sample multiplier (lower is easier on the cpu but less than 1 loses sample resolution)
+#define SAMPLE_MULTIPLIER 0.1
 // how much time between samples
-#define SAMPLE_DELAY 1
+#define SAMPLE_DELAY (1000000 / SAMPLE_MULTIPLIER / 44100)
 
 // how many bytes the header of a vgm file is
 #define HEADER_SIZE 256
@@ -45,6 +47,16 @@
 uint8_t* buffer;
 uint8_t* playPointer;
 uint8_t* eofPointer;
+
+// debug mode? prints things yo
+//#define DEBUG
+
+// wait a bit to let the chips register the signals
+void pulseDelay()
+{
+	usleep(1);
+	//delay(1);
+}
 
 // put a value on the data lines
 void dataOut(int data)
@@ -63,9 +75,9 @@ void dataOut(int data)
 void resetChips()
 {
 	digitalWrite(PIN_RST, 0);
-	delay(1);
+	pulseDelay();
 	digitalWrite(PIN_RST, 1);
-	delay(1);
+	pulseDelay();
 }
 
 // pulses an enable signal to the ays given
@@ -73,10 +85,10 @@ void pulseEnable(int ay)
 {
 	if(ay & AY_0) digitalWrite(PIN_EN0, 1);
 	if(ay & AY_1) digitalWrite(PIN_EN1, 1);
-	delay(1);
+	pulseDelay();
 	if(ay & AY_0) digitalWrite(PIN_EN0, 0);
 	if(ay & AY_1) digitalWrite(PIN_EN1, 0);
-	delay(1);
+	pulseDelay();
 }
 
 // latch an address on one of the ays (or both) 0 = first, 1 = second, 2 = both
@@ -191,7 +203,9 @@ void collectBytes(uint8_t byte, int bytes)
 void handleCommand(int commandString)
 {
 	uint8_t* bytes = (uint8_t*)&commandString;
+#ifdef DEBUG
 	printf("CMD: 0x%x 0x%x 0x%x 0x%x\n", bytes[0], bytes[1], bytes[2], bytes[3]);
+#endif
 
 	// ay write
 	if(bytes[0] == 0xA0)
@@ -202,17 +216,17 @@ void handleCommand(int commandString)
 	else if(bytes[0] == 0x61)
 	{
 		int samples = bytes[1] + (bytes[2] << 8);
-		sampleDelta += samples;
+		sampleDelta += samples * SAMPLE_MULTIPLIER;
 	}
 	// wait 735 samples
 	else if(bytes[0] == 0x62)
 	{
-		sampleDelta += 735;
+		sampleDelta += 735 * SAMPLE_MULTIPLIER;
 	}
 	// wait 882 samples
 	else if(bytes[0] == 0x63)
 	{
-		sampleDelta += 882;
+		sampleDelta += 882 * SAMPLE_MULTIPLIER;
 	}
 	// end of sound data
 	else if(bytes[0] == 0x66)
@@ -223,14 +237,13 @@ void handleCommand(int commandString)
 	else if(bytes[0] & 0xF0 == 0x70)
 	{
 		int samples = (bytes[0] & 0x0F) + 1;
-		sampleDelta += samples;
+		sampleDelta += samples * SAMPLE_MULTIPLIER;
 	}
 }
 
 // this is the sample timer interrupt handler
 void timerHandler(int sig)
 {
-	printf("Hello\n");
 	// while we are behind or on schedule..
 	// and while there is data to be processed..
 	// ..process bits
@@ -262,7 +275,9 @@ void timerHandler(int sig)
 			else if(offset == 0x07)
 			{
 				eof = valueBuffer ? (valueBuffer - 0x04) : 0;
+#ifdef DEBUG
 				printf("EOF: 0x%x\n", eof);
+#endif
 			}
 			// loop offset
 			else if(offset == 0x1C)
@@ -272,7 +287,9 @@ void timerHandler(int sig)
 			else if(offset == 0x1F)
 			{
 				loop = valueBuffer ? (valueBuffer - 0x1C) : 0;
+#ifdef DEBUG
 				printf("LOOP: 0x%x\n", loop);
+#endif
 			}
 			// remainig bytes of header
 			else if(offset == 0x34)
@@ -282,7 +299,9 @@ void timerHandler(int sig)
 			else if(offset == 0x37)
 			{
 				fileHeader = valueBuffer - valueBufSize;
+#ifdef DEBUG
 				printf("REM: 0x%x\n", fileHeader);
+#endif
 			}
 			// 32bit value of ay clock value
 			else if(offset == 0x74)
@@ -292,7 +311,9 @@ void timerHandler(int sig)
 			else if(offset == 0x77)
 			{
 				gpioClockSet(PIN_CLK, valueBuffer);
+#ifdef DEBUG
 				printf("CLOCK: 0x%i\n", valueBuffer);
+#endif
 			}
 
 			// clear the value buffer before reading commands
@@ -380,19 +401,15 @@ int main()
 	//test();
 	
 	// setup the timer interrupt
-	struct sigaction sa;
-	struct itimerval timer;
+	struct itimerval tout_val;
 
-	memset(&sa, 0, sizeof(sa));
-	sa.sa_handler = &timerHandler;
-	sigaction(SIGVTALRM, &sa, NULL);
+	tout_val.it_interval.tv_sec = 0;
+	tout_val.it_interval.tv_usec = SAMPLE_DELAY;
+	tout_val.it_value.tv_sec = 0;
+	tout_val.it_value.tv_usec = SAMPLE_DELAY;
+	setitimer(ITIMER_REAL, &tout_val,0);
 
-	timer.it_value.tv_sec = 0;
-	timer.it_value.tv_usec = 0;
-	timer.it_interval.tv_sec = 0;
-	timer.it_interval.tv_usec = 250000;
-
-	setitimer(ITIMER_VIRTUAL, &timer, NULL);
+	signal(SIGALRM, timerHandler);
 	
 	// allocate buffer for vgm stream
 	buffer = (uint8_t*)malloc(BUF_SIZE);

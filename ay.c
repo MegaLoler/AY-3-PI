@@ -2,9 +2,8 @@
  *
  * todo:
  *   better timer interrupt that isnt so unreliable??
- *   second ay support
- *   magic command to reset everything
- *   fix the weird clock speed thats higher than it should be apparently?
+ *   better clock generator? this isnt so accurate
+ *   magic command to reset everything through stdin
  */
 
 #include <stdint.h>
@@ -232,7 +231,14 @@ void handleCommand(int commandString)
 	// ay write
 	if(bytes[0] == 0xA0)
 	{
-		writeToRegister(bytes[1], bytes[2], AY_0);
+		if((bytes[1] & 0x80) == 0)
+		{
+			writeToRegister(bytes[1], bytes[2], AY_0);
+		}
+		else
+		{
+			writeToRegister(bytes[1] & 0x0F, bytes[2], AY_1);
+		}
 	}
 	// wait nn nn samples
 	else if(bytes[0] == 0x61)
@@ -275,10 +281,16 @@ void handleCommand(int commandString)
 		}
 	}
 	// wait n+1 samples
-	else if(bytes[0] & 0xF0 == 0x70)
+	else if((bytes[0] & 0xF0) == 0x70)
 	{
 		int samples = (bytes[0] & 0x0F) + 1;
 		sampleDelta += samples * SAMPLE_MULTIPLIER;
+	}
+	else
+	{
+#ifdef DEBUG
+		printf("UNKNOWN CMD: 0x%x 0x%x 0x%x 0x%x\n", bytes[0], bytes[1], bytes[2], bytes[3]);
+#endif
 	}
 }
 

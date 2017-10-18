@@ -1,3 +1,12 @@
+/* raspy pi 2xAY3 player!
+ *
+ * todo:
+ *   better timer interrupt that isnt so unreliable??
+ *   second ay support
+ *   magic command to reset everything
+ *   fix the weird clock speed thats higher than it should be apparently?
+ */
+
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -34,8 +43,8 @@
 #define CLK_FREQ 1789773
 //#define CLK_FREQ 3579545
 
-// sample multiplier (lower is easier on the cpu but less than 1 loses sample resolution)
-#define SAMPLE_MULTIPLIER 0.1
+// sample multiplier (lower is more stable but less than 1 loses sample resolution)
+#define SAMPLE_MULTIPLIER 0.125
 // how much time between samples
 #define SAMPLE_DELAY (1000000 / SAMPLE_MULTIPLIER / 44100)
 
@@ -49,7 +58,11 @@ uint8_t* playPointer;
 uint8_t* eofPointer;
 
 // debug mode? prints things yo
-//#define DEBUG
+#define DEBUG
+// prints all the commands
+//#define VERBOSE
+// prints every byte!
+//#define REAL_VERBOSE
 
 // wait a bit to let the chips register the signals
 void pulseDelay()
@@ -161,6 +174,9 @@ int eof;
 // stores specified loop offset
 int loop;
 
+// end of sound data yet?
+int end;
+
 // 32bit buffer
 uint32_t valueBuffer;
 // how many bytes left to add to it
@@ -174,6 +190,10 @@ void newSong()
 {
 	fileHeader = HEADER_SIZE;
 	offset = 0;
+	end = 0;
+	loop = 0;
+	eof = 0;
+	valueBufRemaining = 0;
 }
 
 // reset the player
@@ -204,7 +224,9 @@ void handleCommand(int commandString)
 {
 	uint8_t* bytes = (uint8_t*)&commandString;
 #ifdef DEBUG
+#ifdef VERBOSE
 	printf("CMD: 0x%x 0x%x 0x%x 0x%x\n", bytes[0], bytes[1], bytes[2], bytes[3]);
+#endif
 #endif
 
 	// ay write
@@ -231,7 +253,26 @@ void handleCommand(int commandString)
 	// end of sound data
 	else if(bytes[0] == 0x66)
 	{
-
+		if(loop)
+		{
+			// get distance back to loop offset from here
+			// plus an extra to account for this one
+			int delta = offset - loop + 1;
+			// jump back there
+			offset -= delta;
+			playPointer -= delta;
+#ifdef DEBUG
+			printf("Looping back to 0x%x!\n", offset);
+#endif
+		}
+		else
+		{
+			// end of sound data, ignore rest
+			end = 1;
+#ifdef DEBUG
+			printf("End of sound data.\n");
+#endif
+		}
 	}
 	// wait n+1 samples
 	else if(bytes[0] & 0xF0 == 0x70)
@@ -249,108 +290,130 @@ void timerHandler(int sig)
 	// ..process bits
 	while(sampleDelta <= 0 && playPointer != eofPointer)
 	{
+		// if this is the end of the file then.. prepare for new vgm file data!
+		if(eof && offset == eof)
+		{
+#ifdef DEBUG
+			printf("End of file reached.\n");
+#endif
+			newSong();
+			continue;
+		}
+
 		// get the byte
 		uint8_t byte = *(playPointer++);
 
-		// collect any pending bytes to the value buffer
-		if(valueBufRemaining > 0)
+		// as long as we havent reached the end of sound data!
+		if(!end)
 		{
-			valueBuffer |= byte << (8 * valueBufSize);
-			valueBufSize++;
-			valueBufRemaining--;
-		}
+#ifdef DEBUG
+#ifdef VERBOSE
+#ifdef REAL_VERBOSE
+			printf("BYTE: 0x%x\n", byte);
+#endif
+#endif
+#endif
 
-		// process bytes
-		if(fileHeader > 0)
-		{
-			// one less byte in the header remains
-			fileHeader--;
-
-			// processes header bytes
-			// remainig bytes of file
-			if(offset == 0x04)
+			// collect any pending bytes to the value buffer
+			if(valueBufRemaining > 0)
 			{
-				collectBytes(byte, 4);
-			}
-			else if(offset == 0x07)
-			{
-				eof = valueBuffer ? (valueBuffer - 0x04) : 0;
-#ifdef DEBUG
-				printf("EOF: 0x%x\n", eof);
-#endif
-			}
-			// loop offset
-			else if(offset == 0x1C)
-			{
-				collectBytes(byte, 4);
-			}
-			else if(offset == 0x1F)
-			{
-				loop = valueBuffer ? (valueBuffer - 0x1C) : 0;
-#ifdef DEBUG
-				printf("LOOP: 0x%x\n", loop);
-#endif
-			}
-			// remainig bytes of header
-			else if(offset == 0x34)
-			{
-				collectBytes(byte, 4);
-			}
-			else if(offset == 0x37)
-			{
-				fileHeader = valueBuffer - valueBufSize;
-#ifdef DEBUG
-				printf("REM: 0x%x\n", fileHeader);
-#endif
-			}
-			// 32bit value of ay clock value
-			else if(offset == 0x74)
-			{
-				collectBytes(byte, 4);
-			}
-			else if(offset == 0x77)
-			{
-				gpioClockSet(PIN_CLK, valueBuffer);
-#ifdef DEBUG
-				printf("CLOCK: 0x%i\n", valueBuffer);
-#endif
+				valueBuffer |= byte << (8 * valueBufSize);
+				valueBufSize++;
+				valueBufRemaining--;
 			}
 
-			// clear the value buffer before reading commands
-			if(fileHeader == 0) valueBuffer = 0;
-		}
-		else
-		{
-			// processes vgm stream bytes
-			// collect whole command strings
-			if(valueBufRemaining == 0)
+			// process bytes
+			if(fileHeader > 0)
 			{
-				if(valueBuffer)
+				// one less byte in the header remains
+				fileHeader--;
+
+				// processes header bytes
+				// remainig bytes of file
+				if(offset == 0x04)
 				{
-					handleCommand(valueBuffer);
-					valueBuffer = 0;
+					collectBytes(byte, 4);
 				}
-				else
+				else if(offset == 0x07)
 				{
-					if((byte & 0xF0) == 0xE0)
+					eof = valueBuffer ? (valueBuffer + 0x04) : 0;
+#ifdef DEBUG
+					printf("EOF: 0x%x\n", eof);
+#endif
+				}
+				// loop offset
+				else if(offset == 0x1C)
+				{
+					collectBytes(byte, 4);
+				}
+				else if(offset == 0x1F)
+				{
+					loop = valueBuffer ? (valueBuffer - 0x1C) : 0;
+#ifdef DEBUG
+					printf("LOOP: 0x%x\n", loop);
+#endif
+				}
+				// remainig bytes of header
+				else if(offset == 0x34)
+				{
+					collectBytes(byte, 4);
+				}
+				else if(offset == 0x37)
+				{
+					fileHeader = valueBuffer - valueBufSize;
+#ifdef DEBUG
+					printf("REM: 0x%x\n", fileHeader);
+#endif
+				}
+				// 32bit value of ay clock value
+				else if(offset == 0x74)
+				{
+					collectBytes(byte, 4);
+				}
+				else if(offset == 0x77)
+				{
+					gpioClockSet(PIN_CLK, valueBuffer);
+#ifdef DEBUG
+					printf("CLOCK: 0x%i\n", valueBuffer);
+#endif
+				}
+
+				// clear the value buffer before reading commands
+				if(fileHeader == 0) valueBuffer = 0;
+			}
+			else
+			{
+				// processes vgm stream bytes
+				// collect whole command strings
+				if(valueBufRemaining == 0)
+				{
+					if(valueBuffer)
 					{
-						collectBytes(byte, 5);
-					}
-					else if((byte & 0xF0) >= 0xC0 && (byte & 0xF0) <= 0xD0)
-					{
-						collectBytes(byte, 4);
-					}
-					else if(((byte & 0xF0) >= 0xA0 && (byte & 0xF0) <= 0xB0) || (byte >= 0x51 && byte <= 0x61))
-					{
-						collectBytes(byte, 3);
-					}
-					else if(byte == 0x4F || byte == 0x50)
-					{
-						collectBytes(byte, 2);
+						handleCommand(valueBuffer);
+						valueBuffer = 0;
 					}
 					else
 					{
-						handleCommand(byte);
+						if((byte & 0xF0) == 0xE0)
+						{
+							collectBytes(byte, 5);
+						}
+						else if((byte & 0xF0) >= 0xC0 && (byte & 0xF0) <= 0xD0)
+						{
+							collectBytes(byte, 4);
+						}
+						else if(((byte & 0xF0) >= 0xA0 && (byte & 0xF0) <= 0xB0) || (byte >= 0x51 && byte <= 0x61))
+						{
+							collectBytes(byte, 3);
+						}
+						else if(byte == 0x4F || byte == 0x50)
+						{
+							collectBytes(byte, 2);
+						}
+						else
+						{
+							handleCommand(byte);
+						}
 					}
 				}
 			}

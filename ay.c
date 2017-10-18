@@ -43,7 +43,7 @@
 //#define CLK_FREQ 3579545
 
 // sample multiplier (lower is more stable but less than 1 loses sample resolution)
-#define SAMPLE_MULTIPLIER 0.125
+#define SAMPLE_MULTIPLIER 0.01
 // how much time between samples
 #define SAMPLE_DELAY (1000000 / SAMPLE_MULTIPLIER / 44100)
 
@@ -476,6 +476,7 @@ int main()
 	//test();
 	
 	// setup the timer interrupt
+	// totally copied from the internet
 	struct itimerval tout_val;
 
 	tout_val.it_interval.tv_sec = 0;
@@ -502,6 +503,16 @@ int main()
 	{
 		*(eofPointer++) = (uint8_t)byte;
 		while(eofPointer - buffer >= BUF_SIZE) eofPointer -= BUF_SIZE;
+
+		// magic reset sequence
+		// watch out, it wont work at the very edge of the buffer!!
+		if(*((uint32_t*)(eofPointer - 4)) == 0xFFFFFFFF)
+		{
+#ifdef DEBUG
+			printf("Received magic reset signal!\n");
+#endif
+			reset();
+		}
 	}
 
 	// wait til done playing

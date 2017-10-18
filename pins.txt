@@ -12,3 +12,4 @@ WiringPi pins configuration:
 12 = bus control (bc2)
 13 = ay 1 enable (bdir)
 14 = ay 2 enable (bdir)
+10 = reset

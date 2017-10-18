@@ -9,6 +9,7 @@ PIN_D7=5
 PIN_BC=12
 PIN_EN0=13
 PIN_EN1=14
+PIN_RES=10
 
 BC_LATCH=0
 BC_WRITE=1
@@ -25,6 +26,7 @@ gpio mode $PIN_D7 out
 gpio mode $PIN_BC out
 gpio mode $PIN_EN0 out
 gpio mode $PIN_EN1 out
+gpio mode $PIN_RES out
 
 function latch_address
 {
@@ -67,6 +69,9 @@ function write_value
 	latch_address $1
 	latch_value $2
 }
+
+# reset high (not reset)
+gpio write $PIN_RES 1
 
 # max vol, no env
 write_value 0x08 0x0F

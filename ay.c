@@ -374,7 +374,7 @@ void timerHandler(int sig)
 				{
 					gpioClockSet(PIN_CLK, valueBuffer);
 #ifdef DEBUG
-					printf("CLOCK: 0x%i\n", valueBuffer);
+					printf("CLOCK: %ihz\n", valueBuffer);
 #endif
 				}
 

@@ -1,8 +1,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <unistd.h>
+#include <string.h>
 #include <signal.h>
+#include <sys/time.h>
 #include <wiringPi.h>
 
 // define the pin numberings for the ay connections
@@ -189,13 +190,47 @@ void collectBytes(uint8_t byte, int bytes)
 // handle a command string
 void handleCommand(int commandString)
 {
-	printf("CMD: 0x%x\n", commandString);
-	sampleDelta++;
+	uint8_t* bytes = (uint8_t*)&commandString;
+	printf("CMD: 0x%x 0x%x 0x%x 0x%x\n", bytes[0], bytes[1], bytes[2], bytes[3]);
+
+	// ay write
+	if(bytes[0] == 0xA0)
+	{
+		writeToRegister(bytes[1], bytes[2], AY_0);
+	}
+	// wait nn nn samples
+	else if(bytes[0] == 0x61)
+	{
+		int samples = bytes[1] + (bytes[2] << 8);
+		sampleDelta += samples;
+	}
+	// wait 735 samples
+	else if(bytes[0] == 0x62)
+	{
+		sampleDelta += 735;
+	}
+	// wait 882 samples
+	else if(bytes[0] == 0x63)
+	{
+		sampleDelta += 882;
+	}
+	// end of sound data
+	else if(bytes[0] == 0x66)
+	{
+
+	}
+	// wait n+1 samples
+	else if(bytes[0] & 0xF0 == 0x70)
+	{
+		int samples = (bytes[0] & 0x0F) + 1;
+		sampleDelta += samples;
+	}
 }
 
 // this is the sample timer interrupt handler
 void timerHandler(int sig)
 {
+	printf("Hello\n");
 	// while we are behind or on schedule..
 	// and while there is data to be processed..
 	// ..process bits
@@ -261,13 +296,12 @@ void timerHandler(int sig)
 			}
 
 			// clear the value buffer before reading commands
-			valueBuffer = 0;
+			if(fileHeader == 0) valueBuffer = 0;
 		}
 		else
 		{
 			// processes vgm stream bytes
 			// collect whole command strings
-			printf("bte: 0x%x\n", byte);
 			if(valueBufRemaining == 0)
 			{
 				if(valueBuffer)
@@ -309,9 +343,6 @@ void timerHandler(int sig)
 	// only process samples if we are passed the header
 	// (that's when playback has "begun")
 	if(fileHeader == 0) sampleDelta--;
-	
-	// setup next timer
-	alarm(SAMPLE_DELAY);
 }
 
 // start
@@ -349,8 +380,19 @@ int main()
 	//test();
 	
 	// setup the timer interrupt
-	signal(SIGALRM, &timerHandler);
-	alarm(SAMPLE_DELAY);
+	struct sigaction sa;
+	struct itimerval timer;
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = &timerHandler;
+	sigaction(SIGVTALRM, &sa, NULL);
+
+	timer.it_value.tv_sec = 0;
+	timer.it_value.tv_usec = 0;
+	timer.it_interval.tv_sec = 0;
+	timer.it_interval.tv_usec = 250000;
+
+	setitimer(ITIMER_VIRTUAL, &timer, NULL);
 	
 	// allocate buffer for vgm stream
 	buffer = (uint8_t*)malloc(BUF_SIZE);
